@@ -17,19 +17,15 @@ jobs:
       with:
         python-version: 3.9
 
-    - name: Cache Python packages
-      uses: actions/cache@v2
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-pip-
-
-    - name: Install dependencies
+    - name: Install required dependencies
       run: |
         sudo apt-get update
+        sudo apt-get install -y dnsutils net-tools
         python -m pip install --upgrade pip
         pip install -r requirements.txt
+
+    - name: Verify DNS resolution
+      run: nslookup cluster0.cqll1b7.mongodb.net
 
     - name: Run the script
       env:
