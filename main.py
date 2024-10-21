@@ -25,7 +25,7 @@ MAX_TRANSLATION_WORKERS = 10
 MONGO_URL = os.getenv('MONGO_URL')
 # MongoDB connection
 client = MongoClient('MONGO_URL')
-db = client['polls_database']
+db = client['govtprepbuddy_database']
 polls_collection = db['polls']
 scraped_urls_collection = db['scraped_urls']
 
