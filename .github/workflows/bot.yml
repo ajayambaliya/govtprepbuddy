@@ -1,28 +1,37 @@
-name: Manual Scrape
+name: Telegram Quiz Bot
 
-# Trigger the workflow manually via GitHub Actions
 on:
+  push:
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
-  scrape_and_store:
+  run-script:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout the repository
-      uses: actions/checkout@v3
+    - uses: actions/checkout@v2
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v2
       with:
-        python-version: '3.8'
+        python-version: 3.9
+
+    - name: Cache Python packages
+      uses: actions/cache@v2
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
 
     - name: Install dependencies
       run: |
+        sudo apt-get update
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Run the scraping script
+    - name: Run the script
       env:
         MONGO_URL: ${{ secrets.MONGO_URL }}
       run: |
