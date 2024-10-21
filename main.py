@@ -23,9 +23,9 @@ RETRY_DELAY = 2
 TRANSLATION_BATCH_SIZE = 50
 MAX_TRANSLATION_WORKERS = 10
 
-MONGO_URL = os.getenv('MONGO_URL')
+MONGO_URI = os.getenv('MONGO_URI')
 # MongoDB connection
-client = MongoClient('MONGO_URL')
+client = MongoClient('MONGO_URI')
 db = client['govtprepbuddy_database']
 polls_collection = db['polls']
 scraped_urls_collection = db['scraped_urls']
