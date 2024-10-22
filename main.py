@@ -23,7 +23,7 @@ TRANSLATION_BATCH_SIZE = 50
 MAX_TRANSLATION_WORKERS = 10
 
 # MongoDB connection
-client = MongoClient('mongo_uri')
+client = MongoClient('MONGO_URI')
 db = client['polls_database']
 polls_collection = db['polls']
 scraped_urls_collection = db['scraped_urls']
