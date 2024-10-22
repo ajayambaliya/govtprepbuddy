@@ -16,7 +16,7 @@ def setup_mongodb_connection():
     """Setup MongoDB connection with proper error handling"""
     try:
         # Get MongoDB URI from environment variable
-        mongo_uri = os.environ.get('MONGO_URI')
+        mongo_uri = os.environ.get('MONGO_URL')
         if not mongo_uri:
             raise ValueError("MongoDB URI not found in environment variables")
             
