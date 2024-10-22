@@ -10,7 +10,6 @@ import time
 import random
 from datetime import datetime
 from calendar import monthrange
-import os
 
 
 # Suppress SSL warnings (not recommended for production use)
@@ -23,10 +22,9 @@ RETRY_DELAY = 2
 TRANSLATION_BATCH_SIZE = 50
 MAX_TRANSLATION_WORKERS = 10
 
-MONGO_URI = os.getenv('MONGO_URI')
 # MongoDB connection
-client = MongoClient('MONGO_URI')
-db = client['govtprepbuddy_database']
+client = MongoClient('mongo_uri')
+db = client['polls_database']
 polls_collection = db['polls']
 scraped_urls_collection = db['scraped_urls']
 
