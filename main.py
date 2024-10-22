@@ -10,6 +10,32 @@ import time
 import random
 from datetime import datetime
 from calendar import monthrange
+import os
+
+def setup_mongodb_connection():
+    """Setup MongoDB connection with proper error handling"""
+    try:
+        # Get MongoDB URI from environment variable
+        mongo_uri = os.environ.get('MONGO_URL')
+        if not mongo_uri:
+            raise ValueError("MongoDB URI not found in environment variables")
+            
+        # Create MongoDB client with proper timeout settings
+        client = MongoClient(
+            mongo_uri,
+            serverSelectionTimeoutMS=5000,  # 5 second timeout for server selection
+            connectTimeoutMS=10000,  # 10 second timeout for initial connection
+            socketTimeoutMS=30000,  # 30 second timeout for socket operations
+        )
+        
+        # Test the connection
+        client.admin.command('ping')
+        
+        db = client['polls_database']
+        return client, db
+    except Exception as e:
+        print(f"MongoDB Connection Error: {str(e)}")
+        raise
 
 
 # Suppress SSL warnings (not recommended for production use)
@@ -23,10 +49,13 @@ TRANSLATION_BATCH_SIZE = 50
 MAX_TRANSLATION_WORKERS = 10
 
 # MongoDB connection
-client = MongoClient('MONGO_URI')
-db = client['polls_database']
-polls_collection = db['polls']
-scraped_urls_collection = db['scraped_urls']
+try:
+    client, db = setup_mongodb_connection()
+    polls_collection = db['polls']
+    scraped_urls_collection = db['scraped_urls']
+except Exception as e:
+    print(f"Failed to initialize MongoDB connection: {e}")
+    sys.exit(1)
 
 # Automatically get the current month and year
 now = datetime.now()
