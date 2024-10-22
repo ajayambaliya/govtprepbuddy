@@ -1,5 +1,4 @@
 name: Telegram Quiz Bot
-
 on:
   push:
     branches: [ main ]
@@ -8,27 +7,33 @@ on:
 jobs:
   run-script:
     runs-on: ubuntu-latest
-
     steps:
     - uses: actions/checkout@v2
-
+    
     - name: Set up Python
       uses: actions/setup-python@v2
       with:
-        python-version: 3.9
-
+        python-version: '3.9'
+    
     - name: Install required dependencies
       run: |
-        sudo apt-get update
-        sudo apt-get install -y dnsutils net-tools
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-
-    - name: Verify DNS resolution
-      run: nslookup cluster0.cqll1b7.mongodb.net
-
+        pip install pymongo[srv]  # Add this line to ensure srv support
+    
+    - name: Verify MongoDB Connection
+      run: |
+        python -c "
+        from pymongo import MongoClient
+        import os
+        client = MongoClient(os.environ.get('MONGO_URL'))
+        client.admin.command('ping')
+        print('MongoDB connection successful!')
+        "
+      env:
+        MONGO_URL: ${{ secrets.MONGO_URI }}
+    
     - name: Run the script
       env:
         MONGO_URL: ${{ secrets.MONGO_URI }}
-      run: |
-        python main.py
+      run: python main.py
