@@ -11,6 +11,7 @@ import random
 from datetime import datetime
 from calendar import monthrange
 import os
+import sys
 
 def setup_mongodb_connection():
     """Setup MongoDB connection with proper error handling"""
@@ -108,37 +109,8 @@ async def get_available_urls(session):
         return available_urls
     return []
 
-
-
-
-
-async def scrape_multiple_urls(urls):
-    """Scrape HTML content and parse questions from the URLs."""
-    html_results = await fetch_html_content(urls)
-
-    all_questions = []
-    for html_content, url in zip(html_results, urls):
-        if html_content:
-            questions = parse_questions(html_content)
-
-            # Add date information from the URL
-            try:
-                date_part = url.rstrip('/').split('/')[-1]
-                year, month, day = map(int, date_part.split('-'))
-                for question in questions:
-                    question['year'] = year
-                    question['month'] = month
-                    question['day'] = day
-                all_questions.extend(questions)
-
-                # Log the scraped URL to MongoDB
-                log_scraped_url_to_mongodb(url)
-            except ValueError as e:
-                print(f"Error parsing date from URL {url}: {e}")
-
-    return all_questions
-
 def parse_questions(html_content):
+    """Parse HTML content to extract questions, options, answers, and explanations."""
     soup = BeautifulSoup(html_content, 'html.parser')
     questions = []
     question_divs = soup.select("div.bix-div-container")
@@ -154,41 +126,71 @@ def parse_questions(html_content):
             options = [option_div.get_text(strip=True) for option_div in option_divs]
         question_data['options'] = options
         
-        answer_div = question_div.select_one("div.bix-ans-option")
-        if answer_div:
-            correct_answer_span = answer_div.select_one("span.mdi")
-            if correct_answer_span:
-                class_to_answer = {
-                    "mdi-alpha-a-circle-outline": "A",
-                    "mdi-alpha-b-circle-outline": "B",
-                    "mdi-alpha-c-circle-outline": "C",
-                    "mdi-alpha-d-circle-outline": "D"
-                }
-                correct_answer = next(
-                    (class_to_answer[cls] for cls in correct_answer_span.get("class", []) if cls in class_to_answer), 
-                    "Unknown"
-                )
-                question_data['correct_answer'] = correct_answer
+        # First method: try to get the answer from the hidden input
+        hidden_answer = question_div.select_one("input.jq-hdnakq")
+        if hidden_answer and hidden_answer.has_attr('value'):
+            question_data['correct_answer'] = hidden_answer['value']
+        else:
+            # Second method: try to get from the option-svg-letter class
+            answer_div = question_div.select_one("div.bix-div-answer")
+            if answer_div:
+                letter_span = answer_div.select_one("span[class^='option-svg-letter-']")
+                if letter_span:
+                    letter_class = [cls for cls in letter_span.get("class", []) if cls.startswith("option-svg-letter-")]
+                    if letter_class:
+                        # Extract the letter from the class name (last character of option-svg-letter-a)
+                        letter = letter_class[0][-1].upper()
+                        question_data['correct_answer'] = letter
+                    else:
+                        question_data['correct_answer'] = "Unknown"
+                else:
+                    question_data['correct_answer'] = "Unknown"
+            else:
+                question_data['correct_answer'] = "Unknown"
         
         explanation_div = question_div.select_one("div.bix-ans-description")
         question_data['explanation'] = explanation_div.get_text(strip=True) if explanation_div else 'No explanation provided'
         
-        discuss_link = question_div.select_one("a.mdi-comment-text-outline")
-        if discuss_link and discuss_link.has_attr('href'):
-            discussion_url = discuss_link['href']
-            category = discussion_url.split("/current-affairs/")[1].split("/")[0]
-            question_data['category'] = category
+        # Extract category from the discussion link or category element
+        category_element = question_div.select_one("div.explain-link")
+        if category_element:
+            category_link = category_element.select_one("a.text-link")
+            if category_link and category_link.has_attr('href'):
+                try:
+                    category = category_link['href'].split("/current-affairs/")[1].split("/")[0]
+                    question_data['category'] = category.lower()
+                except IndexError:
+                    question_data['category'] = "general"
         else:
-            question_data['category'] = "Unknown"
+            # Try alternate method via discuss link
+            discuss_link = question_div.select_one("a.discuss, a.mdi-comment-text-outline")
+            if discuss_link and discuss_link.has_attr('href'):
+                try:
+                    category = discuss_link['href'].split("/current-affairs/")[1].split("/")[0]
+                    question_data['category'] = category.lower()
+                except IndexError:
+                    question_data['category'] = "general"
+            else:
+                question_data['category'] = "general"
         
         questions.append(question_data)
     
     return questions
 
-
+def log_scraped_url_to_mongodb(url):
+    """Log successfully scraped URL to MongoDB."""
+    try:
+        scraped_urls_collection.update_one(
+            {"url": url},
+            {"$set": {"scraped_at": datetime.now(), "status": "completed"}},
+            upsert=True
+        )
+    except Exception as e:
+        print(f"Error logging scraped URL to MongoDB: {e}")
 
 @lru_cache(maxsize=1000)
 def translate_text(text, target_language='gujarati'):
+    """Translate text to target language with retry mechanism."""
     translator = GoogleTranslator(source='auto', target=target_language)
     for attempt in range(MAX_RETRIES):
         try:
@@ -201,27 +203,38 @@ def translate_text(text, target_language='gujarati'):
                 return text  # Return original text if all attempts fail
 
 def translate_batch(texts, target_language):
+    """Translate a batch of texts."""
     return [translate_text(text, target_language) for text in texts]
 
 def translate_questions(questions, target_languages=('en', 'hi', 'gu')):
+    """Translate questions, options, and explanations to specified languages."""
     with ThreadPoolExecutor(max_workers=MAX_TRANSLATION_WORKERS) as executor:
         for lang in target_languages:
+            if lang == 'en':  # Skip translation for English
+                continue
+                
+            target_lang_map = {
+                'hi': 'hindi',
+                'gu': 'gujarati'
+            }
+            target_language = target_lang_map.get(lang, lang)
+            
             for i in range(0, len(questions), TRANSLATION_BATCH_SIZE):
                 batch = questions[i:i+TRANSLATION_BATCH_SIZE]
                 
                 # Translate questions
                 question_texts = [q['question'] for q in batch]
-                translated_questions = list(executor.map(lambda t: translate_text(t, lang), question_texts))
+                translated_questions = list(executor.map(lambda t: translate_text(t, target_language), question_texts))
                 for q, tq in zip(batch, translated_questions):
                     q[f'question_{lang}'] = tq
                 
                 # Translate options
                 for j, q in enumerate(batch):
-                    q[f'options_{lang}'] = list(executor.map(lambda t: translate_text(t, lang), q['options']))
+                    q[f'options_{lang}'] = list(executor.map(lambda t: translate_text(t, target_language), q['options']))
                 
                 # Translate explanations
                 explanation_texts = [q['explanation'] for q in batch if q['explanation']]
-                translated_explanations = list(executor.map(lambda t: translate_text(t, lang), explanation_texts))
+                translated_explanations = list(executor.map(lambda t: translate_text(t, target_language), explanation_texts))
                 for q, te in zip((q for q in batch if q['explanation']), translated_explanations):
                     q[f'explanation_{lang}'] = te
                 
@@ -231,6 +244,7 @@ def translate_questions(questions, target_languages=('en', 'hi', 'gu')):
     return questions
 
 def generate_poll_data(questions):
+    """Generate structured poll data from questions for MongoDB storage."""
     polls = []
     for idx, question_data in enumerate(questions, start=1):
         year = question_data['year']
@@ -243,34 +257,42 @@ def generate_poll_data(questions):
             "year": year,
             "month": month,
             "day": day,
-            "category": question_data.get('category', 'General'),
+            "category": question_data.get('category', 'general'),
             "correct_answers": {},
             "languages": {}
         }
 
         letter_to_index = {'A': 0, 'B': 1, 'C': 2, 'D': 3}
         
+        # Get the correct answer index
+        correct_answer_letter = question_data.get('correct_answer', "Unknown")
+        correct_answer_idx = letter_to_index.get(correct_answer_letter, -1)
+        
+        # Process each language
         for lang in ('en', 'hi', 'gu'):
-            correct_answer_letter = question_data.get('correct_answer', "Unknown")
-            correct_answer_idx = letter_to_index.get(correct_answer_letter, -1)
-
+            # Set the correct answer index for each language
             if correct_answer_idx != -1:
                 poll["correct_answers"][lang] = correct_answer_idx
             else:
                 print(f"Warning: Invalid correct answer for question: {question_data['question']}")
-
+            
+            # Set language-specific content
+            question_key = f'question_{lang}' if lang != 'en' else 'question'
+            options_key = f'options_{lang}' if lang != 'en' else 'options'
+            explanation_key = f'explanation_{lang}' if lang != 'en' else 'explanation'
+            
             poll["languages"][lang] = {
-                "question": question_data.get(f'question_{lang}', ""),
-                "options": question_data.get(f'options_{lang}', []),
-                "explanation": question_data.get(f'explanation_{lang}', "")
+                "question": question_data.get(question_key, ""),
+                "options": question_data.get(options_key, []),
+                "explanation": question_data.get(explanation_key, "")
             }
 
         polls.append(poll)
 
     return polls
 
-
 def save_poll_data_to_mongodb(polls):
+    """Save poll data to MongoDB, avoiding duplicates."""
     try:
         existing_poll_ids = set(
             poll["_id"] for poll in polls_collection.find({"_id": {"$in": [poll["_id"] for poll in polls]}}, {"_id": 1})
@@ -287,6 +309,7 @@ def save_poll_data_to_mongodb(polls):
         print(f"Error saving polls to MongoDB: {e}")
 
 async def scrape_multiple_urls(urls):
+    """Scrape HTML content and parse questions from multiple URLs."""
     html_results = await fetch_html_content(urls)
 
     all_questions = []
@@ -310,6 +333,9 @@ async def scrape_multiple_urls(urls):
                 question['day'] = day
 
             all_questions.extend(questions)
+            
+            # Log the successfully scraped URL
+            log_scraped_url_to_mongodb(url)
 
     return all_questions
     
@@ -324,9 +350,8 @@ def ensure_scraped_urls_collection():
     # Ensure a unique index on the 'url' field to prevent duplicates
     scraped_urls_collection.create_index("url", unique=True)
 
-
 def get_unscraped_urls(available_urls):
-    """Filter out already scraped URLs from MongoDB and log new URLs."""
+    """Filter out already scraped URLs from MongoDB."""
     normalized_available_urls = [url.rstrip('/') for url in available_urls]
 
     try:
@@ -342,22 +367,16 @@ def get_unscraped_urls(available_urls):
         # Display URLs to be scraped
         print(f"New URLs to be scraped: {unscraped_urls}")
 
-        # Log the new URLs to MongoDB
-        if unscraped_urls:
-            scraped_urls_collection.insert_many(
-                [{"url": url, "scraped_at": datetime.now()} for url in unscraped_urls]
-            )
-            print(f"Logged {len(unscraped_urls)} new URLs to MongoDB.")
-
         return unscraped_urls
     except Exception as e:
         print(f"Error fetching or logging URLs in MongoDB: {e}")
         return normalized_available_urls  # In case of error, try to scrape all
 
-
-
-
 async def main():
+    """Main function to run the scraper."""
+    # Ensure the scraped_urls collection exists
+    ensure_scraped_urls_collection()
+    
     # Automatically get the current month and year
     now = datetime.now()
     year = now.year
@@ -428,4 +447,5 @@ async def main():
             print("No questions found to scrape.")
 
 # Run the async main function
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
